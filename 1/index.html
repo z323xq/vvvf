@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVPWM Simulator</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .controls { margin-bottom: 20px; }
+        svg { border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>SVPWM Simulator</h1>
+    <div class="controls">
+        <label for="frequency">Frequency: <span id="freqValue">50</span> Hz</label>
+        <input type="range" id="frequency" min="1" max="100" value="50">
+        <br>
+        <label for="amplitude">Amplitude: <span id="ampValue">0.5</span></label>
+        <input type="range" id="amplitude" min="0" max="1" step="0.1" value="0.5">
+        <br>
+        <button id="toggleAudio">Initialize Audio</button>
+    </div>
+    <svg width="800" height="400" id="svgCanvas"></svg>
+    <div id="log" style="height: 200px; overflow-y: scroll; border: 1px solid #ccc; margin-top: 20px; padding: 10px;"></div>
+
+
+    <script>
+        let audioCtx = null;
+        let svpwmNode = null;
+
+        const frequencySlider = document.getElementById('frequency');
+        const amplitudeSlider = document.getElementById('amplitude');
+        const freqValue = document.getElementById('freqValue');
+        const ampValue = document.getElementById('ampValue');
+        const toggleAudioBtn = document.getElementById('toggleAudio');
+        const svgCanvas = document.getElementById('svgCanvas');
+
+        function createSVPWMNode(audioCtx) {
+            const bufferSize = 4096;
+            return new AudioWorkletNode(audioCtx, 'svpwm-processor', {
+                outputChannelCount: [1],
+                processorOptions: {
+                    bufferSize: bufferSize
+                }
+            });
+        }
+
+const logElement = document.getElementById('log');
+
+        function log(message) {
+            console.log(message);
+            logElement.innerHTML += message + '<br>';
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        async function setupAudio() {
+            try {
+                log('Setting up audio...');
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                log('AudioContext created');
+                await audioCtx.audioWorklet.addModule('svpwm-processor.js');
+                log('AudioWorklet module added');
+                svpwmNode = createSVPWMNode(audioCtx);
+                log('SVPWM node created');
+                svpwmNode.connect(audioCtx.destination);
+                log('SVPWM node connected to destination');
+                updateSVPWMParameters();
+
+                svpwmNode.port.onmessage = (event) => {
+                    if (event.data.type === 'waveform') {
+                        log('Received waveform data: ' + event.data.data.slice(0, 5).join(', ') + '...');
+                        drawWaveform(event.data.data);
+                    }
+                };
+
+                toggleAudioBtn.textContent = 'Start Audio';
+                toggleAudioBtn.onclick = toggleAudio;
+                log('Audio setup complete');
+            } catch (error) {
+                log('Error setting up audio: ' + error.message);
+            }
+        }
+
+        function toggleAudio() {
+            if (!audioCtx) return;
+
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+                toggleAudioBtn.textContent = 'Stop Audio';
+                log('Audio resumed');
+            } else if (audioCtx.state === 'running') {
+                audioCtx.suspend();
+                toggleAudioBtn.textContent = 'Start Audio';
+                log('Audio suspended');
+            }
+        }
+
+        function updateSVPWMParameters() {
+            if (svpwmNode) {
+                const frequency = parseFloat(frequencySlider.value);
+                const amplitude = parseFloat(amplitudeSlider.value);
+                svpwmNode.parameters.get('frequency').setValueAtTime(frequency, audioCtx.currentTime);
+                svpwmNode.parameters.get('amplitude').setValueAtTime(amplitude, audioCtx.currentTime);
+                log(`Parameters updated: frequency = ${frequency}, amplitude = ${amplitude}`);
+            }
+        }
+
+let lastDrawTime = 0;
+const drawInterval = 1000 / 30; // 30 FPS
+
+        function drawWaveform(data) {
+            const currentTime = performance.now();
+            if (currentTime - lastDrawTime < drawInterval) {
+                return; // 아직 그릴 시간이 되지 않았으면 건너뜁니다
+            }
+            lastDrawTime = currentTime;
+
+            const width = svgCanvas.width.baseVal.value;
+            const height = svgCanvas.height.baseVal.value;
+            let points = '';
+            const step = Math.ceil(data.length / width); // 데이터 다운샘플링
+            for (let i = 0; i < data.length; i += step) {
+                const x = (i / data.length) * width;
+                const y = (1 - data[i]) * height / 2;
+                points += `${x},${y} `;
+            }
+            const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            path.setAttribute('d', `M ${points.trim()}`);
+            path.setAttribute('stroke', 'blue');
+            path.setAttribute('fill', 'none');
+            svgCanvas.innerHTML = '';
+            svgCanvas.appendChild(path);
+            log('Waveform drawn');
+        }
+
+        frequencySlider.addEventListener('input', () => {
+            freqValue.textContent = frequencySlider.value;
+            updateSVPWMParameters();
+        });
+
+        amplitudeSlider.addEventListener('input', () => {
+            ampValue.textContent = amplitudeSlider.value;
+            updateSVPWMParameters();
+        });
+
+        toggleAudioBtn.onclick = setupAudio;
+    </script>
+</body>
+</html>
